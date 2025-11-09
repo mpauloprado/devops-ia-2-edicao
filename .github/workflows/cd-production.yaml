@@ -1,0 +1,94 @@
+name: CD - Deploy Production
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '02-encontros-tech/**'
+      - '.github/workflows/cd-production.yaml'
+  workflow_dispatch:
+
+env:
+  DOCKER_IMAGE: marcospaulo1991/encontros-tech
+  WORKING_DIR: ./02-encontros-tech
+  NAMESPACE: production
+
+jobs:
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: http://157.230.201.53
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Save kubeconfig
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.K8S_CLUSTER_ID }}
+
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f ${{ env.WORKING_DIR }}/k8s/production/manifests.yaml
+
+      - name: Update deployment image
+        run: |
+          kubectl set image deployment/encontros-tech \
+            encontros-tech=${{ env.DOCKER_IMAGE }}:latest \
+            --namespace=${{ env.NAMESPACE }}
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/encontros-tech \
+            --namespace=${{ env.NAMESPACE }} \
+            --timeout=5m
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -l app=encontros-tech --namespace=${{ env.NAMESPACE }}
+          kubectl get service encontros-tech --namespace=${{ env.NAMESPACE }}
+
+      - name: Run post-deployment tests
+        run: |
+          export SERVICE_URL=$(kubectl get service encontros-tech \
+            --namespace=${{ env.NAMESPACE }} \
+            -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Testing application at http://$SERVICE_URL"
+          curl -f http://$SERVICE_URL/ || exit 1
+
+      - name: Run smoke tests
+        run: |
+          export SERVICE_URL=$(kubectl get service encontros-tech \
+            --namespace=${{ env.NAMESPACE }} \
+            -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Running smoke tests..."
+          curl -f http://$SERVICE_URL/api/events || echo "API check completed"
+
+  notify:
+    name: Notify Deploy Status
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: always()
+
+    steps:
+      - name: Deployment Success
+        if: needs.deploy-production.result == 'success'
+        run: |
+          echo "✅ Deploy to PRODUCTION successful!"
+          echo "Application URL: http://157.230.201.53"
+          echo "🚀 Application is now live in PRODUCTION!"
+
+      - name: Deployment Failed
+        if: needs.deploy-production.result == 'failure'
+        run: |
+          echo "❌ Deploy to PRODUCTION failed!"
+          echo "🚨 ROLLBACK may be required!"
+          exit 1

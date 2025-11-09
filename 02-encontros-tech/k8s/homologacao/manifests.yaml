@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: encontros-tech
+  namespace: homologacao
+  labels:
+    app: encontros-tech
+    environment: homologacao
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: encontros-tech
+      environment: homologacao
+  template:
+    metadata:
+      labels:
+        app: encontros-tech
+        environment: homologacao
+    spec:
+      containers:
+      - name: encontros-tech
+        image: marcospaulo1991/encontros-tech:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: DATABASE_URL
+        - name: APP_TITLE
+          value: "Encontros Tech - HOMOLOGAÇÃO"
+        - name: DEBUG
+          value: "true"
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "8000"
+        - name: LOG_LEVEL
+          value: "DEBUG"
+        - name: LOG_FORMAT
+          value: "colored"
+        - name: SERVICE_NAME
+          value: "encontros-tech"
+        - name: SERVICE_VERSION
+          value: "1.0.0"
+        - name: PROMETHEUS_MULTIPROC_DIR
+          value: "/tmp/prometheus_multiproc"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: encontros-tech
+  namespace: homologacao
+  labels:
+    app: encontros-tech
+    environment: homologacao
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+  selector:
+    app: encontros-tech
+    environment: homologacao

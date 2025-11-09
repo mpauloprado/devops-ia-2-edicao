@@ -1,0 +1,84 @@
+name: CD - Deploy Homologação
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - '02-encontros-tech/**'
+      - '.github/workflows/cd-homologacao.yaml'
+  workflow_dispatch:
+
+env:
+  DOCKER_IMAGE: marcospaulo1991/encontros-tech
+  WORKING_DIR: ./02-encontros-tech
+  NAMESPACE: homologacao
+
+jobs:
+  deploy-homologacao:
+    name: Deploy to Homologacao
+    runs-on: ubuntu-latest
+    environment:
+      name: homologacao
+      url: http://134.209.129.72
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Save kubeconfig
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.K8S_CLUSTER_ID }}
+
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f ${{ env.WORKING_DIR }}/k8s/homologacao/manifests.yaml
+
+      - name: Update deployment image
+        run: |
+          kubectl set image deployment/encontros-tech \
+            encontros-tech=${{ env.DOCKER_IMAGE }}:develop \
+            --namespace=${{ env.NAMESPACE }}
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/encontros-tech \
+            --namespace=${{ env.NAMESPACE }} \
+            --timeout=5m
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -l app=encontros-tech --namespace=${{ env.NAMESPACE }}
+          kubectl get service encontros-tech --namespace=${{ env.NAMESPACE }}
+
+      - name: Run post-deployment tests
+        run: |
+          export SERVICE_URL=$(kubectl get service encontros-tech \
+            --namespace=${{ env.NAMESPACE }} \
+            -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Testing application at http://$SERVICE_URL"
+          curl -f http://$SERVICE_URL/ || exit 1
+
+  notify:
+    name: Notify Deploy Status
+    runs-on: ubuntu-latest
+    needs: deploy-homologacao
+    if: always()
+
+    steps:
+      - name: Deployment Success
+        if: needs.deploy-homologacao.result == 'success'
+        run: |
+          echo "✅ Deploy to HOMOLOGAÇÃO successful!"
+          echo "Application URL: http://134.209.129.72"
+
+      - name: Deployment Failed
+        if: needs.deploy-homologacao.result == 'failure'
+        run: |
+          echo "❌ Deploy to HOMOLOGAÇÃO failed!"
+          exit 1
