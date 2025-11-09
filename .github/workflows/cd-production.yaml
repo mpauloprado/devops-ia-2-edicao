@@ -1,12 +1,12 @@
 name: CD - Deploy Production
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI - Continuous Integration"]
+    types:
+      - completed
     branches:
       - main
-    paths:
-      - '02-encontros-tech/**'
-      - '.github/workflows/cd-production.yaml'
   workflow_dispatch:
 
 env:
@@ -18,6 +18,7 @@ jobs:
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     environment:
       name: production
       url: http://157.230.201.53
@@ -43,6 +44,9 @@ jobs:
         run: |
           kubectl set image deployment/encontros-tech \
             encontros-tech=${{ env.DOCKER_IMAGE }}:latest \
+            --namespace=${{ env.NAMESPACE }}
+          kubectl patch deployment encontros-tech \
+            -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/restartedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}}}}" \
             --namespace=${{ env.NAMESPACE }}
 
       - name: Wait for rollout
