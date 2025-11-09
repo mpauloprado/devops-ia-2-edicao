@@ -8,6 +8,7 @@ on:
     paths:
       - '02-encontros-tech/**'
       - '.github/workflows/ci.yaml'
+      - '.github/workflows/cd-*.yaml'
   pull_request:
     branches:
       - main
