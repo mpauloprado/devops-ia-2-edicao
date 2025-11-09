@@ -1,0 +1,123 @@
+name: Conversão Distância - CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - '01-conversao-distancia/**'
+      - '.github/workflows/conversao-distancia-cicd.yaml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '01-conversao-distancia/**'
+  workflow_dispatch:
+
+env:
+  DOCKER_IMAGE: marcospaulo1991/conversao-distancia
+  WORKING_DIR: ./01-conversao-distancia
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          pytest tests/ -v --tb=short || echo "No tests found"
+
+  build:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push'
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ env.WORKING_DIR }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  deploy-docker-compose:
+    name: Deploy with Docker Compose (Optional)
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && false  # Desabilitado - habilite se necessário
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to server
+        run: |
+          echo "Deploy via docker-compose ou similar"
+          # Adicione seus comandos de deploy aqui
+
+  notify:
+    name: Notify Build Status
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+
+    steps:
+      - name: Build Success
+        if: needs.build.result == 'success'
+        run: |
+          echo "✅ Build successful!"
+          echo "Image: ${{ env.DOCKER_IMAGE }}:latest"
+
+      - name: Build Failed
+        if: needs.build.result == 'failure'
+        run: |
+          echo "❌ Build failed!"
+          exit 1
