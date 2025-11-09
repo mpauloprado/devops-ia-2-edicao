@@ -1,3 +1,4 @@
+# Teste CI/CD Pipeline - Versão atualizada
 import os
 from flask import Flask, request, g
 from prometheus_flask_exporter import PrometheusMetrics
