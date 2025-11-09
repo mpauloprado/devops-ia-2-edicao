@@ -1,12 +1,12 @@
 name: CD - Deploy Homologação
 
 on:
-  workflow_run:
-    workflows: ["CI - Continuous Integration"]
-    types:
-      - completed
+  push:
     branches:
       - develop
+    paths:
+      - '02-encontros-tech/**'
+      - '.github/workflows/cd-homologacao.yaml'
   workflow_dispatch:
 
 env:
@@ -18,7 +18,6 @@ jobs:
   deploy-homologacao:
     name: Deploy to Homologacao
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     environment:
       name: homologacao
       url: http://134.209.129.72
