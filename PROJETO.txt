@@ -1,0 +1,539 @@
+================================================================================
+                    PROJETO ENCONTROS TECH - DOCUMENTAÇÃO
+================================================================================
+
+VISÃO GERAL
+-----------
+Aplicação web Flask para gerenciamento de eventos tech, com pipeline CI/CD
+completo, separação de ambientes (produção e homologação) e infraestrutura
+rodando em Kubernetes na DigitalOcean.
+
+================================================================================
+ARQUITETURA DO PROJETO
+================================================================================
+
+┌─────────────┐      ┌──────────────┐      ┌─────────────┐      ┌──────────────┐
+│  Developer  │─────▶│   GitHub     │─────▶│   GitHub    │─────▶│  Docker Hub  │
+│   (Local)   │ push │ (Repository) │ trigger  Actions   │ build │  (Registry)  │
+└─────────────┘      └──────────────┘      └─────────────┘      └──────────────┘
+                            │                     │                      │
+                            │                     │                      │ pull
+                            ▼                     ▼                      ▼
+                     ┌──────────────────────────────────────────────────────┐
+                     │         DigitalOcean Kubernetes Cluster             │
+                     │                  (k8s-bootcamp-2)                    │
+                     │  ┌───────────────────┐    ┌───────────────────┐    │
+                     │  │   HOMOLOGACAO     │    │    PRODUCTION     │    │
+                     │  │   (namespace)     │    │    (namespace)    │    │
+                     │  │   1 replica       │    │    2 replicas     │    │
+                     │  │   DEBUG: true     │    │    DEBUG: false   │    │
+                     │  └─────────┬─────────┘    └─────────┬─────────┘    │
+                     │            │                        │              │
+                     │            ▼                        ▼              │
+                     │  ┌──────────────────┐    ┌──────────────────┐    │
+                     │  │ db-homologacao   │    │  db-producao     │    │
+                     │  │  (PostgreSQL)    │    │  (PostgreSQL)    │    │
+                     │  └──────────────────┘    └──────────────────┘    │
+                     └──────────────────────────────────────────────────────┘
+
+================================================================================
+FERRAMENTAS E SUAS FUNÇÕES
+================================================================================
+
+1. GIT (Local)
+   - Controle de versão local
+   - Gerencia branches: main (produção) e develop (homologação)
+   - Repositório: /home/kali/devops-ia-fork
+
+2. GITHUB (Repositório Remoto)
+   - Armazena código-fonte (arquivos .py, .html, .yaml, etc)
+   - Repositório: mpauloprado/devops-ia-fork
+   - Hospeda workflows de CI/CD na pasta .github/workflows/
+   - Gerencia secrets (credenciais)
+
+3. GITHUB ACTIONS (Automação CI/CD)
+   - Executa pipelines automaticamente
+   - 3 workflows principais:
+     * ci.yaml - Testes e build
+     * cd-homologacao.yaml - Deploy para homologação
+     * cd-production.yaml - Deploy para produção
+
+4. DOCKER HUB (Registro de Imagens)
+   - Armazena imagens Docker compiladas
+   - Repository: marcospaulo1991/encontros-tech
+   - Tags: latest, develop, main-<commit-sha>
+   - Tamanho médio das imagens: ~134MB
+
+5. DIGITALOCEAN (Cloud Provider)
+   - Hospeda cluster Kubernetes (k8s-bootcamp-2)
+   - ID: 82c89726-23a3-4b16-9082-03cee0a8425a
+   - Região: NYC1
+   - Provê LoadBalancers para acesso externo
+   - Hospeda bancos de dados PostgreSQL gerenciados
+
+6. KUBERNETES (Orquestração de Containers)
+   - Gerencia deployments, services, secrets
+   - 2 namespaces isolados: production e homologacao
+   - Auto-scaling e health checks
+   - Pull de imagens do Docker Hub
+
+7. POSTGRESQL (Banco de Dados)
+   - 2 bancos independentes:
+     * db-homologacao (porta 25060)
+     * db-producao (porta 25060)
+   - Conexão via SSL (sslmode=require)
+   - Credenciais armazenadas em Kubernetes Secrets
+
+8. DOCKER DESKTOP (NÃO UTILIZADO)
+   - Poderia ser usado para testes locais
+   - Projeto roda 100% em cloud, Docker local não é necessário
+
+================================================================================
+FLUXO COMPLETO CI/CD
+================================================================================
+
+CENÁRIO 1: DEPLOY PARA HOMOLOGAÇÃO (branch develop)
+----------------------------------------------------
+
+1. Developer faz alteração no código
+   └─▶ Edita arquivo (ex: base.html)
+
+2. Commit e Push para branch develop
+   └─▶ git add .
+   └─▶ git commit -m "mensagem"
+   └─▶ git push origin develop
+
+3. GitHub recebe o push
+   └─▶ Detecta alteração em 02-encontros-tech/**
+
+4. GitHub Actions - Workflow CI (ci.yaml) é disparado
+   └─▶ Job: test
+       ├─ Checkout do código
+       ├─ Setup Python 3.11
+       ├─ Instala dependências (pip install -r requirements.txt)
+       └─ Executa testes (pytest)
+
+   └─▶ Job: build (só executa se test passou)
+       ├─ Setup Docker Buildx
+       ├─ Login no Docker Hub
+       ├─ Build da imagem Docker
+       ├─ Tag: marcospaulo1991/encontros-tech:develop
+       └─ Push para Docker Hub
+
+5. GitHub Actions - Workflow CD Homologação (cd-homologacao.yaml) é disparado
+   └─▶ Detecta push no develop
+   └─▶ Job: deploy-homologacao
+       ├─ Instala doctl (DigitalOcean CLI)
+       ├─ Autentica no cluster Kubernetes
+       ├─ Aplica manifestos (kubectl apply -f manifests.yaml)
+       ├─ Atualiza imagem do deployment
+       │   └─ kubectl set image deployment/encontros-tech encontros-tech=marcospaulo1991/encontros-tech:develop
+       ├─ Force restart do deployment (patch com annotation restartedAt)
+       ├─ Aguarda rollout (timeout 5 minutos)
+       └─ Testa aplicação (curl health check)
+
+6. Kubernetes no namespace homologacao
+   └─▶ Puxa imagem do Docker Hub (imagePullPolicy: Always)
+   └─▶ Cria/atualiza pod com novo container
+   └─▶ Injeta variáveis de ambiente
+   └─▶ Injeta DATABASE_URL do secret db-credentials
+   └─▶ Pod inicia aplicação Flask na porta 8000
+   └─▶ Service LoadBalancer expõe na porta 80
+   └─▶ IP externo: 134.209.129.72
+
+7. Aplicação está disponível
+   └─▶ http://134.209.129.72
+   └─▶ Título: "Encontros Tech - HOMOLOGAÇÃO"
+
+
+CENÁRIO 2: DEPLOY PARA PRODUÇÃO (branch main)
+----------------------------------------------
+
+1. Developer valida em homologação e faz merge
+   └─▶ git checkout main
+   └─▶ git merge develop
+   └─▶ git push origin main
+
+2. GitHub recebe o push no main
+
+3. GitHub Actions - Workflow CI (ci.yaml) é disparado
+   └─▶ Mesmos passos do cenário 1
+   └─▶ Mas cria tag adicional: marcospaulo1991/encontros-tech:latest
+
+4. GitHub Actions - Workflow CD Production (cd-production.yaml) é disparado
+   └─▶ Job: deploy-production
+       ├─ Mesmos passos do deploy-homologacao
+       ├─ Mas usa namespace: production
+       └─ Usa imagem tag: latest
+
+5. Kubernetes no namespace production
+   └─▶ Mantém 2 réplicas (vs 1 em homologação)
+   └─▶ DEBUG: false (vs true em homologação)
+   └─▶ LOG_LEVEL: INFO (vs DEBUG em homologação)
+   └─▶ Usa db-producao
+   └─▶ Título: "Encontros Tech" (sem sufixo HOMOLOGAÇÃO)
+
+================================================================================
+ESTRUTURA DE AMBIENTES
+================================================================================
+
+HOMOLOGAÇÃO (namespace: homologacao)
+------------------------------------
+Branch source: develop
+Replicas: 1
+Debug mode: true
+Log level: DEBUG
+Log format: colored
+Database: db-homologacao
+Service URL: http://134.209.129.72
+Título app: "Encontros Tech - HOMOLOGAÇÃO"
+Versão atual: V2 (com alteração "Encontros.Techv - V2")
+
+PRODUÇÃO (namespace: production)
+--------------------------------
+Branch source: main
+Replicas: 2 (alta disponibilidade)
+Debug mode: false
+Log level: INFO
+Log format: simple
+Database: db-producao
+Service URL: http://162.243.165.249
+Título app: "Encontros Tech"
+
+================================================================================
+CONFIGURAÇÕES KUBERNETES
+================================================================================
+
+DEPLOYMENT (encontros-tech)
+---------------------------
+- Image: marcospaulo1991/encontros-tech:latest (ou :develop)
+- ImagePullPolicy: Always (sempre puxa versão mais recente)
+- Container Port: 8000
+- Replicas: 1 (homologacao) | 2 (production)
+
+Variáveis de ambiente:
+  - DATABASE_URL: via secretKeyRef (secret: db-credentials)
+  - APP_TITLE: específico por ambiente
+  - DEBUG: true (homologacao) | false (production)
+  - HOST: 0.0.0.0
+  - PORT: 8000
+  - LOG_LEVEL: DEBUG (homologacao) | INFO (production)
+  - LOG_FORMAT: colored (homologacao) | simple (production)
+  - SERVICE_NAME: encontros-tech
+  - SERVICE_VERSION: 1.0.0
+  - PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
+
+SERVICE (encontros-tech)
+------------------------
+- Type: LoadBalancer
+- Port: 80 (externo) → 8000 (interno)
+- Protocol: TCP
+- Selector: app=encontros-tech, environment={homologacao|production}
+
+SECRETS (db-credentials)
+------------------------
+Criados manualmente em cada namespace via kubectl:
+
+kubectl create secret generic db-credentials \
+  --namespace=homologacao \
+  --from-literal=DATABASE_URL='postgresql://doadmin:SENHA@private-db-homologacao-do-user-28812412-0.e.db.ondigitalocean.com:25060/defaultdb?sslmode=require'
+
+kubectl create secret generic db-credentials \
+  --namespace=production \
+  --from-literal=DATABASE_URL='postgresql://doadmin:SENHA@private-db-producao-do-user-28812412-0.e.db.ondigitalocean.com:25060/defaultdb?sslmode=require'
+
+================================================================================
+GITHUB SECRETS CONFIGURADOS
+================================================================================
+
+1. DIGITALOCEAN_ACCESS_TOKEN
+   - Token de acesso à API da DigitalOcean
+   - Usado por: doctl kubernetes cluster kubeconfig save
+
+2. K8S_CLUSTER_ID
+   - ID do cluster Kubernetes
+   - Valor: 82c89726-23a3-4b16-9082-03cee0a8425a
+   - Usado por: doctl para conectar ao cluster correto
+
+3. DOCKER_USERNAME
+   - Usuário do Docker Hub
+   - Valor: marcospaulo1991
+
+4. DOCKER_PASSWORD
+   - Senha/Token do Docker Hub
+   - Usado por: docker login no workflow CI
+
+================================================================================
+ESTRUTURA DE ARQUIVOS DO PROJETO
+================================================================================
+
+devops-ia-fork/
+├── .github/
+│   └── workflows/
+│       ├── ci.yaml                    # CI: testes e build
+│       ├── cd-homologacao.yaml        # CD: deploy homologação
+│       └── cd-production.yaml         # CD: deploy produção
+│
+├── 02-encontros-tech/
+│   ├── main.py                        # Entry point Flask
+│   ├── requirements.txt               # Dependências Python
+│   ├── Dockerfile                     # Build da imagem Docker
+│   ├── core/
+│   │   ├── database.py               # Configuração SQLAlchemy
+│   │   ├── settings.py               # Configurações da app
+│   │   └── logging.py                # Sistema de logs
+│   ├── models/
+│   │   └── event.py                  # Model de eventos
+│   ├── routers/
+│   │   ├── api_router.py             # API endpoints
+│   │   └── page_router.py            # Rotas de páginas
+│   ├── templates/
+│   │   ├── base.html                 # Template base (V2)
+│   │   ├── index.html                # Página inicial
+│   │   └── ...
+│   ├── static/
+│   │   └── ...                       # CSS, JS, imagens
+│   └── k8s/
+│       ├── homologacao/
+│       │   └── manifests.yaml        # Manifests homologação
+│       └── production/
+│           └── manifests.yaml        # Manifests produção
+│
+└── PROJETO.txt                        # Este arquivo
+
+================================================================================
+INTEGRAÇÕES ENTRE FERRAMENTAS
+================================================================================
+
+GIT ←→ GITHUB
+-------------
+Protocolo: HTTPS
+Autenticação: Personal Access Token (com scope workflow)
+Comando: git push origin {branch}
+Resultado: Código sincronizado no repositório remoto
+
+GITHUB ←→ GITHUB ACTIONS
+------------------------
+Trigger: push, workflow_dispatch
+Arquivos: .github/workflows/*.yaml
+Eventos monitorados:
+  - push em branches (main, develop)
+  - mudanças em paths (02-encontros-tech/**)
+Secrets injetados: DIGITALOCEAN_ACCESS_TOKEN, K8S_CLUSTER_ID, DOCKER_USERNAME, DOCKER_PASSWORD
+
+GITHUB ACTIONS ←→ DOCKER HUB
+----------------------------
+Ferramenta: docker/login-action@v3, docker/build-push-action@v5
+Autenticação: DOCKER_USERNAME + DOCKER_PASSWORD
+Push de imagens: docker push marcospaulo1991/encontros-tech:{tag}
+Tags geradas:
+  - develop (branch develop)
+  - main (branch main)
+  - latest (branch main apenas)
+  - {branch}-{sha} (commit específico)
+
+GITHUB ACTIONS ←→ DIGITALOCEAN
+------------------------------
+Ferramenta: doctl (DigitalOcean CLI)
+Comando: doctl kubernetes cluster kubeconfig save {K8S_CLUSTER_ID}
+Resultado: kubeconfig salvo em ~/.kube/config
+Permite: kubectl commands nos workflows
+
+GITHUB ACTIONS ←→ KUBERNETES
+----------------------------
+Ferramenta: kubectl
+Comandos principais:
+  - kubectl apply -f manifests.yaml
+  - kubectl set image deployment/encontros-tech ...
+  - kubectl patch deployment ...
+  - kubectl rollout status ...
+  - kubectl get pods/service
+Namespace: especificado via --namespace flag
+
+KUBERNETES ←→ DOCKER HUB
+------------------------
+Operação: Image Pull
+Imagem: marcospaulo1991/encontros-tech:{tag}
+Policy: Always (sempre puxa versão mais recente)
+Sem autenticação (imagens públicas)
+
+KUBERNETES ←→ POSTGRESQL
+------------------------
+Protocolo: PostgreSQL wire protocol (SSL)
+Porta: 25060
+Autenticação: usuário/senha em Kubernetes Secret
+Connection string: postgresql://user:pass@host:port/db?sslmode=require
+Injetado via: secretKeyRef em deployment manifests
+
+APPLICATION ←→ POSTGRESQL
+-------------------------
+Driver: psycopg2 (via SQLAlchemy)
+ORM: SQLAlchemy
+Model: Event (models/event.py)
+Database URL: via variável ambiente DATABASE_URL
+Auto-create tables: Base.metadata.create_all(bind=engine)
+
+APPLICATION ←→ PROMETHEUS
+-------------------------
+Biblioteca: prometheus_flask_exporter
+Endpoint: /metrics
+Métricas customizadas: app_info
+Storage: /tmp/prometheus_multiproc (multiprocessing mode)
+
+USUÁRIO ←→ APPLICATION
+---------------------
+Protocolo: HTTP
+LoadBalancer: DigitalOcean LoadBalancer
+IPs externos:
+  - Homologação: http://134.209.129.72
+  - Produção: http://162.243.165.249
+Porta: 80 (redirecionado para 8000 no container)
+
+================================================================================
+COMANDOS ÚTEIS
+================================================================================
+
+KUBERNETES - Verificar status
+------------------------------
+kubectl get namespaces
+kubectl get pods -n homologacao
+kubectl get pods -n production
+kubectl get service -n homologacao
+kubectl get service -n production
+kubectl get deployments -n homologacao
+kubectl get deployments -n production
+
+KUBERNETES - Logs e debug
+--------------------------
+kubectl logs deployment/encontros-tech -n homologacao
+kubectl logs deployment/encontros-tech -n production
+kubectl describe pod <pod-name> -n homologacao
+kubectl rollout status deployment/encontros-tech -n homologacao
+
+KUBERNETES - Secrets
+--------------------
+kubectl get secrets -n homologacao
+kubectl get secrets -n production
+kubectl describe secret db-credentials -n homologacao
+
+KUBERNETES - Forçar novo deploy
+-------------------------------
+kubectl rollout restart deployment/encontros-tech -n homologacao
+kubectl rollout restart deployment/encontros-tech -n production
+
+DOCKER HUB - Listar imagens
+----------------------------
+docker search marcospaulo1991/encontros-tech
+
+GIT - Workflow básico
+---------------------
+# Homologação
+git checkout develop
+git add .
+git commit -m "mensagem"
+git push origin develop
+
+# Produção (após validar em homologação)
+git checkout main
+git merge develop
+git push origin main
+
+DIGITALOCEAN CLI
+----------------
+doctl auth init
+doctl kubernetes cluster list
+doctl kubernetes cluster kubeconfig save 82c89726-23a3-4b16-9082-03cee0a8425a
+
+================================================================================
+HISTÓRICO DE PROBLEMAS E SOLUÇÕES
+================================================================================
+
+PROBLEMA 1: Cluster não encontrado (404)
+-----------------------------------------
+Causa: K8S_CLUSTER_ID apontava para cluster destruído
+Solução: Atualizar secret com novo cluster ID (82c89726-23a3-4b16-9082-03cee0a8425a)
+
+PROBLEMA 2: Deployment não existe
+----------------------------------
+Causa: Cluster novo estava vazio
+Solução: kubectl apply -f manifests.yaml para criar deployment inicial
+
+PROBLEMA 3: Database connection failed
+---------------------------------------
+Causa: DATABASE_URL hardcoded no manifest apontava para DB antigo
+Solução: Criar Kubernetes secrets e usar secretKeyRef
+
+PROBLEMA 4: CD workflow não dispara
+------------------------------------
+Causa: workflow_run trigger não funciona bem em branches não-default
+Solução: Usar trigger push direto ao invés de workflow_run
+
+PROBLEMA 5: Kubernetes não puxa imagem atualizada
+-------------------------------------------------
+Causa: imagePullPolicy padrão (IfNotPresent) usa cache local
+Solução: Adicionar imagePullPolicy: Always nos manifests
+
+PROBLEMA 6: Token GitHub sem permissão
+---------------------------------------
+Causa: Token sem scope 'workflow'
+Solução: Gerar novo token com scope workflow habilitado
+
+================================================================================
+MONITORAMENTO E VERIFICAÇÃO
+================================================================================
+
+1. Verificar pipeline CI/CD
+   └─▶ GitHub → Actions → Workflows
+   └─▶ Verificar checkmarks verdes
+
+2. Verificar imagens no Docker Hub
+   └─▶ https://hub.docker.com/r/marcospaulo1991/encontros-tech/tags
+
+3. Verificar pods rodando
+   └─▶ kubectl get pods -n homologacao
+   └─▶ kubectl get pods -n production
+   └─▶ Status deve ser: Running
+
+4. Verificar aplicação respondendo
+   └─▶ curl http://134.209.129.72
+   └─▶ curl http://162.243.165.249
+
+5. Verificar métricas Prometheus
+   └─▶ curl http://134.209.129.72/metrics
+   └─▶ curl http://162.243.165.249/metrics
+
+================================================================================
+MELHORIAS FUTURAS POSSÍVEIS
+================================================================================
+
+1. Implementar Ingress Controller para domínios personalizados
+2. Adicionar HorizontalPodAutoscaler para auto-scaling
+3. Implementar Prometheus + Grafana para monitoramento visual
+4. Adicionar alertas via Slack/Discord
+5. Implementar blue-green deployment
+6. Adicionar testes de integração no CI
+7. Implementar cache Redis
+8. Adicionar CDN para assets estáticos
+9. Implementar backup automático do banco de dados
+10. Adicionar health checks mais robustos
+
+================================================================================
+CONTATOS E REFERÊNCIAS
+================================================================================
+
+Developer: Marcos Paulo
+Email: marcos.pradoit@hotmail.com
+GitHub: mpauloprado
+Docker Hub: marcospaulo1991
+
+Repositório: https://github.com/mpauloprado/devops-ia-fork
+Docker Hub: https://hub.docker.com/r/marcospaulo1991/encontros-tech
+DigitalOcean: Cluster k8s-bootcamp-2 (NYC1)
+
+Versão do documento: 1.0
+Última atualização: 2025-11-09
+Status do projeto: ✅ OPERACIONAL
+
+================================================================================
+FIM DO DOCUMENTO
+================================================================================
